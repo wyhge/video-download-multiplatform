@@ -1,6 +1,6 @@
 ---
 name: video-download-multiplatform
-description: 用 yt-dlp + ffmpeg 从任意主流视频平台下载视频到本地，自动合并分轨的视频流与音频流为单个 MP4。支持 B站/bilibili、抖音/Douyin、TikTok、小红书/XiaoHongShu、微博/Weibo、优酷/Youku、爱奇艺/iQiyi、西瓜视频/Ixigua、AcFun、斗鱼、虎牙、YouTube、Twitter/X、Instagram、Facebook、Vimeo、Twitch 等 1700+ 站点。不依赖任何第三方 API Key，比 redfox 类需要密钥的下载器更可靠。内置 check_env.py 自检 + bili_dl.py 绕开 B站 mcdn 拦截。仅用于下载自己上传或已获授权、可合法保存的内容。适用于用户提供视频链接要求「下载视频」「保存视频到本地」「下载抖音/B站/小红书视频」「获取视频文件」的场景。触发词：下载视频、下载B站、下载抖音、下载小红书、下载快手、下载YouTube、保存视频、yt-dlp、视频下载到本地。
+description: 用 yt-dlp + ffmpeg 从 B站/bilibili、抖音/Douyin、小红书/XiaoHongShu 三个平台下载视频到本地，自动合并分轨的视频流与音频流为单个 MP4。不依赖任何第三方 API Key：B站配 bili_dl.py 绕开 mcdn 拦截，抖音配 douyin_cdp.py 绕过签名反爬，小红书用 yt-dlp 原生提取器（保留 xsec_token）。其余平台仍可由 yt-dlp 通用提取器下载。仅用于下载自己上传或已获授权、可合法保存的内容。适用于用户提供视频链接要求「下载抖音/B站/小红书视频」「保存视频到本地」「获取视频文件」的场景。触发词：下载视频、下载B站、下载抖音、下载小红书、保存视频、yt-dlp、视频下载到本地。
 description_zh: 下载各平台视频到本地
 description_en: Download videos from any platform
 disable: false
@@ -56,29 +56,15 @@ FFMPEG=".../ffmpeg.exe"
 
 ## 平台支持情况
 
-yt-dlp 内置 **1700+ 提取器**。国内外主流平台：
+本技能聚焦以下三个平台，每个都有开箱即用的专用 / 特化方案：
 
-| 平台 | Extractor | 备注 |
-|------|-----------|------|
-| **B站 bilibili** | `BiliBili` 等 20+ | 支持番剧、合集、收藏夹、UP主空间、课程 |
-| **抖音** | `Douyin` | ✅ 原生支持 |
-| **TikTok** | `TikTok` | ✅ 原生支持（部分子提取器已失效） |
-| **小红书** | `XiaoHongShu` | ✅ 原生支持 |
-| **微博** | `Weibo` / `WeiboVideo` / `WeiboUser` | ✅ |
-| **优酷** | `youku` / `youku:show` | ✅ |
-| **爱奇艺** | `iqiyi` | ✅ |
-| **西瓜视频** | `Ixigua` | ✅ |
-| **AcFun** | `AcFunVideo` / `AcFunBangumi` | ✅ |
-| **斗鱼 / 虎牙** | `DouyuTV` / `huya:video` | 直播+录播 |
-| **YouTube / Twitter / Instagram / Facebook / Vimeo / Twitch** | 各自原生 | ✅ |
-| **快手** | ❌ 无原生 extractor | 靠通用提取器兜底，成功率不稳定 |
-| **腾讯视频** | ❌ 无原生 extractor | 同上 |
+| 平台 | 方案 | 备注 |
+|------|------|------|
+| **B站 bilibili** | 专用脚本 `bili_dl.py` | 番剧/合集/收藏夹/UP主空间/课程；绕开 mcdn 拦截拿更高码率 |
+| **抖音** | 专用 CDP 脚本 `douyin_cdp.py`（见 §1.5） | ⚠️ yt-dlp 直下必失败，必须走专用脚本 |
+| **小红书** | yt-dlp 原生支持 | URL 须保留 `xsec_token`，去掉会 403 |
 
-**查证某平台是否支持**（不要凭猜测回答用户）：
-
-```bash
-"$YTDLP" --list-extractors 2>/dev/null | grep -iE "<平台关键词>"
-```
+> 其它平台仍可由 yt-dlp 通用提取器下载（先跑 §0 自检拿到 `$YTDLP` 路径），但本说明文档只展开上述三个。
 
 ## Steps
 
@@ -95,17 +81,36 @@ B站 DASH 直链常分配到 `mcdn.bilivideo.cn:8082` P2P 节点，在公司/校
 - 比 yt-dlp 通用路径码率更高（实测同一视频：脚本 585 kbps vs yt-dlp 430 kbps）。
 - 会员内容：先用**自己的账号**设 `BILI_SESSDATA` 环境变量再跑；仍不行就退回 yt-dlp + `--cookies-from-browser chrome`。不要使用他人的 Cookie。
 
-其余平台（抖音/小红书/YouTube/微博等）走下面第 2 步。
+抖音走 §1.5 专用脚本；小红书走下面第 2 步。
 
-### 2. 通用 yt-dlp 下载
+### 1.5 抖音专用脚本（CDP 兜底，yt-dlp 直下会失败）
 
-先清理 URL 追踪参数，只保留核心链接：
+抖音的 web 提取器在 yt-dlp 当前版本上**不可用**，原因是两道反爬：
 
-| 平台 | 原始链接 | 清理后 |
-|------|---------|--------|
-| B站 | `bilibili.com/video/BV1xx/?spm_id_from=...&vd_source=...` | `bilibili.com/video/BV1xx/` |
-| 抖音 | `v.douyin.com/xxxxx/` 短链 | 直接用，yt-dlp 会自动跟随跳转 |
-| 小红书 | `xiaohongshu.com/explore/xxx?xsec_token=...` | **保留 `xsec_token`**，去掉它会 403 |
+- **Chrome 127+ 应用绑定加密（ABE）**：抖音要求带浏览器 Cookie，而 Cookie 用 ABE 加密，yt-dlp 的 DPAPI 解密直接报 `Failed to decrypt with DPAPI`。
+- **`a_bogus` 签名挑战**：抖音详情接口（`aweme/detail`）需要页面 JS 实时生成的 `a_bogus` 签名，yt-dlp 的 Douyin 提取器这块还是 `TODO`，直下会报 `Fresh cookies needed`。
+
+所以抖音**不要走 yt-dlp**，改用本技能配套的 CDP 脚本——它启动一个带抖音登录态的 Chrome（headless），让 Chrome 自己的 JS 完成签名并请求详情，再从网络响应里取出真实 CDN 播放地址下载：
+
+```bash
+"$PY" "<SKILL_DIR>/scripts/douyin_cdp.py" "<抖音URL>" "<输出目录>"
+```
+
+要点：
+
+- **链接形态自动归一化**：`jingxuan/vlog?modal_id=ID`、短链 `v.douyin.com/xxx/` 都会被处理；`modal_id` 类精选页链接会归一到规范的 `douyin.com/video/ID`（精选页更易触发风控，规范页更稳）。
+- **需要本机 Chrome 已登录抖音**：脚本会复制你真实 Chrome profile 的登录态到一个临时「非默认」目录（Chrome 拒绝在默认 profile 目录上开远程调试，且复制能保留登录态以绕过人机验证）。若没登录，页面可能弹验证导致取不到地址。
+- **依赖**：`websocket-client`（缺失时脚本自动 `pip install`）；ffmpeg / curl 走既有探测逻辑。
+- **输出解析**：最后一行打印 `FINAL:<绝对路径>`，取名用视频标题（已做非法字符清洗）。
+- 抖音是单文件，无需音视频合并。
+
+### 2. 小红书下载（yt-dlp 通用路径）
+
+小红书用 yt-dlp 原生提取器即可，但分享链接必须**完整保留** `xsec_token` 鉴权参数——被任何清理工具删掉都会 403：
+
+```
+xiaohongshu.com/explore/xxx?xsec_token=...   ← 整个链接原样保留
+```
 
 然后：
 
@@ -129,7 +134,7 @@ B站 DASH 直链常分配到 `mcdn.bilivideo.cn:8082` P2P 节点，在公司/校
 
 ### 3. 检查是否需要合并音视频
 
-高画质视频（DASH 格式，B站/YouTube 常见）会**分轨下载** —— 视频流和音频流是两个文件：
+高画质视频（DASH 格式，B站常见）会**分轨下载** —— 视频流和音频流是两个文件：
 
 ```
 标题.f100026.mp4   ← 纯视频，无声音
@@ -198,8 +203,8 @@ for f in os.listdir(outdir):
   - winget 通道（带 ffprobe）：`winget install --id Gyan.FFmpeg --accept-package-agreements --accept-source-agreements`。下载源较慢。
 - **B站 mcdn 节点被墙**：直链常分配到 `mcdn.bilivideo.cn:8082`（P2P 节点），公司/校园网下该端口被拦截。**解法已固化**：直接用 `scripts/bili_dl.py`。
 - **小红书别删 `xsec_token`**：清理 URL 时保留鉴权参数，否则 403。
-- **快手 / 腾讯视频无原生支持**：只能靠通用提取器，可能失败。失败时如实告知用户，不要反复重试同一命令（频繁重试易触发风控）。
-- **登录墙 / 机器人验证**：报 "Private video"、"Sign in to confirm you're not a bot"（YouTube 常见）时，加 `--cookies-from-browser chrome`，需本机 Chrome 已登录**该用户自己的**账号。
+- **抖音别走 yt-dlp**：抖音 web 提取器在当前 yt-dlp 上不可用——Chrome 127+ 的**应用绑定加密(ABE)** 让 cookie 解不开（报 `Failed to decrypt with DPAPI`），且详情接口要 **`a_bogus` 客户端签名**（yt-dlp 还是 TODO，报 `Fresh cookies needed`）。直接用 `scripts/douyin_cdp.py`（CDP 方案），别在抖音上耗 yt-dlp。
+- **抖音 CDP 脚本前提**：脚本会复制本机 Chrome 登录态到临时目录，**需你已在 Chrome 登录抖音**；未登录时页面可能弹人机验证导致取不到地址。另外 Chrome 拒绝在默认 profile 目录开远程调试，所以必须用临时目录；脚本已自动处理，并加了 `--remote-allow-origins=*` 放行 CDP 连接。
 - **AV1 编码**：B站新视频常用 AV1，`-c copy` 合并没问题，但若后续要重编码需注意解码器支持。
 
 ## 合规与隐私（发布 / 使用前必读）
